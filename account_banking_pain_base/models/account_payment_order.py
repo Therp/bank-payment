@@ -527,6 +527,7 @@ class AccountPaymentOrder(models.Model):
         """Generate the piece of the XML corresponding to PstlAdr"""
         if not partner.country_id:
             return True
+        pain_flavor = gen_args.get("pain_flavor", "")
         postal_address = etree.SubElement(parent_node, "PstlAdr")
         country = etree.SubElement(postal_address, "Ctry")
         country.text = self._prepare_field(
@@ -538,16 +539,20 @@ class AccountPaymentOrder(models.Model):
         )
         bank = self._get_bank_record()
         if bank.enforce_sepa_hybrid_mode:
+            # Keep only city + country.
+            # To stay safe for all pain flavors, use AdrLine only
+            # and do NOT emit TwnNm/PstCd/StrtNm/etc.
             if partner.city:
-                twn = etree.SubElement(postal_address, "TwnNm")
-                twn.text = self._prepare_field(
+                adrline = etree.SubElement(postal_address, "AdrLine")
+                adrline.text = self._prepare_field(
                     "city",
                     "partner.city",
                     {"partner": partner},
-                    35,  # TwnNm max length
+                    70,  # AdrLine max length
                     gen_args=gen_args,
                 )
             return True
+        # untouched below
         if partner.street:
             adrline1 = etree.SubElement(postal_address, "AdrLine")
             adrline1.text = self._prepare_field(
@@ -557,9 +562,10 @@ class AccountPaymentOrder(models.Model):
                 70,
                 gen_args=gen_args,
             )
+
         if (
-            gen_args.get("pain_flavor").startswith("pain.001.001.")
-            or gen_args.get("pain_flavor").startswith("pain.008.001.")
+            pain_flavor.startswith("pain.001.001.")
+            or pain_flavor.startswith("pain.008.001.")
         ) and (partner.zip or partner.city):
             adrline2 = etree.SubElement(postal_address, "AdrLine")
             if partner.zip:
@@ -620,9 +626,11 @@ class AccountPaymentOrder(models.Model):
         bank = self.company_partner_bank_id.bank_id or (
             self.journal_id.bank_account_id and self.journal_id.bank_account_id.bank_id
         )
-        context_with_bank = self.with_context(export_bank_id=bank.id) if bank else self
+        self_with_context_bank = (
+            self.with_context(export_bank_id=bank.id) if bank else self
+        )
         # Call super for a specific context if bank exists
-        return super(AccountPaymentOrder, context_with_bank).open2generated()
+        return super(AccountPaymentOrder, self_with_context_bank).open2generated()
 
     @api.model
     def generate_party_block(
