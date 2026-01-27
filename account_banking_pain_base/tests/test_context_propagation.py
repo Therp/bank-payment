@@ -2,6 +2,8 @@
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl.html).
 from lxml import etree
 
+from odoo import fields
+from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase, tagged
 
 
@@ -138,3 +140,100 @@ class TestOpen2GeneratedBankContext(TransactionCase):
         self.assertIsNone(
             pstl.find("TwnNm"),
         )
+
+    def test_hybrid_address_block_pain09(self):
+        country = self.env["res.country"].search([("code", "=", "NL")], limit=1)
+        partner = self.env["res.partner"].create(
+            {
+                "name": "Hybrid Partner 09",
+                "street": "Oude Fabriekstraat 1",
+                "street2": "2/2.14",
+                "zip": "3812 NR",
+                "city": "Amersfoort",
+                "country_id": country.id,
+            }
+        )
+        self.bank.enforce_sepa_hybrid_mode = True
+        gen_args = {"pain_flavor": "pain.001.001.09"}
+        root = etree.Element("Root")
+        self.po.generate_address_block(root, partner, gen_args)
+        pstl = root.find("PstlAdr")
+        self.assertIsNotNone(pstl)
+        # Ensure XSD sequence order for .09
+        tags = [c.tag for c in list(pstl)]
+        self.assertEqual(tags[0], "PstCd")
+        self.assertEqual(tags[1], "TwnNm")
+        self.assertEqual(tags[2], "Ctry")
+        self.assertTrue(all(t == "AdrLine" for t in tags[3:]))
+
+        self.assertEqual(pstl.find("PstCd").text, partner.zip)
+        self.assertEqual(pstl.find("TwnNm").text, partner.city)
+        self.assertEqual(pstl.find("Ctry").text, partner.country_id.code)
+
+        adr_lines = pstl.findall("AdrLine")
+        self.assertEqual(len(adr_lines), 2)
+        self.assertEqual(adr_lines[0].text, partner.street)
+        self.assertEqual(adr_lines[1].text, partner.street2)
+
+    def test_hybrid_address_block_pain09_requires_city(self):
+        """For pain.001.001.09 in hybrid mode, city is required (TwnNm mandatory)."""
+        country = self.env["res.country"].search([("code", "=", "NL")], limit=1)
+        partner = self.env["res.partner"].create(
+            {
+                "name": "Hybrid Partner 09 No City",
+                "street": "Oudestraat 1",
+                "zip": "3842 NK",
+                "city": False,
+                "country_id": country.id,
+            }
+        )
+        self.bank.enforce_sepa_hybrid_mode = True
+        gen_args = {"pain_flavor": "pain.001.001.09"}
+        root = etree.Element("Root")
+        with self.assertRaises(UserError):
+            self.po.generate_address_block(root, partner, gen_args)
+
+    def test_hybrid_mode_non_09(self):
+        country = self.env["res.country"].search([("code", "=", "NL")], limit=1)
+        partner = self.env["res.partner"].create(
+            {"name": "Hybrid Non09", "city": "Amersfoort", "country_id": country.id}
+        )
+        self.bank.enforce_sepa_hybrid_mode = True
+        gen_args = {"pain_flavor": "pain.001.001.03"}
+        root = etree.Element("Root")
+        self.po.generate_address_block(root, partner, gen_args)
+        pstl = root.find("PstlAdr")
+        self.assertIsNotNone(pstl)
+        self.assertIsNone(pstl.find("TwnNm"))
+
+    def test_requested_date_pain09(self):
+        root = etree.Element("Root")
+        # minimal gen_args required by generate_start_payment_info_block
+        gen_args = {
+            "pain_flavor": "pain.001.001.09",
+            "payment_method": "TRF",
+        }
+        requested_date = fields.Date.to_string(fields.Date.today())
+        (
+            payment_info,
+            nb_of_transactions,
+            control_sum,
+        ) = self.po.generate_start_payment_info_block(
+            parent_node=root,
+            payment_info_ident="'TEST'",
+            priority=False,
+            local_instrument=False,
+            category_purpose=False,
+            sequence_type=False,
+            requested_date=requested_date,
+            eval_ctx={},
+            gen_args=gen_args,
+        )
+        # For TRF we expect ReqdExctnDt and for pain.09 it must wrap a Dt
+        req = payment_info.find("ReqdExctnDt")
+        self.assertIsNotNone(req)
+        dt = req.find("Dt")
+        self.assertIsNotNone(dt)
+        self.assertEqual(dt.text, requested_date)
+        # And the parent node must not directly contain the date text
+        self.assertTrue(req.text in (None, ""))
