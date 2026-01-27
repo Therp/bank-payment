@@ -400,8 +400,13 @@ class AccountPaymentOrder(models.Model):
             request_date_tag = "ReqdColltnDt"
         else:
             request_date_tag = "ReqdExctnDt"
+        # date should be adjusted for 09
         requested_date_node = etree.SubElement(payment_info, request_date_tag)
-        requested_date_node.text = requested_date
+        if (gen_args.get("pain_flavor", "")).startswith("pain.001.001.09"):
+            requested_date_node_dt = etree.SubElement(requested_date_node, "Dt")
+            requested_date_node_dt.text = requested_date
+        else:
+            requested_date_node.text = requested_date
         return payment_info, nb_of_transactions, control_sum
 
     @api.model
@@ -528,20 +533,81 @@ class AccountPaymentOrder(models.Model):
         if not partner.country_id:
             return True
         pain_flavor = gen_args.get("pain_flavor", "")
-        postal_address = etree.SubElement(parent_node, "PstlAdr")
-        country = etree.SubElement(postal_address, "Ctry")
-        country.text = self._prepare_field(
-            "Country",
-            "partner.country_id.code",
-            {"partner": partner},
-            2,
-            gen_args=gen_args,
-        )
         bank = self._get_bank_record()
+        postal_address = etree.SubElement(parent_node, "PstlAdr")
         if bank.enforce_sepa_hybrid_mode:
-            # Keep only city + country.
-            # To stay safe for all pain flavors, use AdrLine only
-            # and do NOT emit TwnNm/PstCd/StrtNm/etc.
+            # hybrid address is only emitted for PAIN .09, because the
+            # schema defines the structured tags (PstCd/TwnNm/Ctry) and enforces
+            # a strict element order where AdrLine must come last
+            if pain_flavor == "pain.001.001.09":
+                if not partner.city:
+                    raise UserError(
+                        _(
+                            "The bank '%(bank)s' enforces SEPA hybrid mode for %(flavor)s, "
+                            "but the partner '%(partner)s' has no City. Please set a City "
+                            "or disable 'Enforce SEPA Hybrid Mode' on the bank."
+                        )
+                        % {
+                            "bank": bank.display_name,
+                            "flavor": pain_flavor,
+                            "partner": partner.display_name,
+                        }
+                    )
+                # Order matters
+                if partner.zip:
+                    pstcd = etree.SubElement(postal_address, "PstCd")
+                    pstcd.text = self._prepare_field(
+                        "zip",
+                        "partner.zip",
+                        {"partner": partner},
+                        16,
+                        gen_args=gen_args,
+                    )
+                twn = etree.SubElement(postal_address, "TwnNm")
+                twn.text = self._prepare_field(
+                    "city",
+                    "partner.city",
+                    {"partner": partner},
+                    35,  # Max35Text
+                    gen_args=gen_args,
+                )
+                country = etree.SubElement(postal_address, "Ctry")
+                country.text = self._prepare_field(
+                    "Country",
+                    "partner.country_id.code",
+                    {"partner": partner},
+                    2,
+                    gen_args=gen_args,
+                )
+                if partner.street:
+                    adrline1 = etree.SubElement(postal_address, "AdrLine")
+                    adrline1.text = self._prepare_field(
+                        "Adress Line1",
+                        "partner.street",
+                        {"partner": partner},
+                        70,
+                        gen_args=gen_args,
+                    )
+                if partner.street2:
+                    adrline2 = etree.SubElement(postal_address, "AdrLine")
+                    adrline2.text = self._prepare_field(
+                        "Adress Line2",
+                        "partner.street2",
+                        {"partner": partner},
+                        70,
+                        gen_args=gen_args,
+                    )
+                return True
+            # default hybrid behavior for other flavors:
+            # Keep only city + country using AdrLine only
+            country = etree.SubElement(postal_address, "Ctry")
+            country.text = self._prepare_field(
+                "Country",
+                "partner.country_id.code",
+                {"partner": partner},
+                2,
+                gen_args=gen_args,
+            )
             if partner.city:
                 adrline = etree.SubElement(postal_address, "AdrLine")
                 adrline.text = self._prepare_field(
