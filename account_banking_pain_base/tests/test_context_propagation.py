@@ -146,10 +146,10 @@ class TestOpen2GeneratedBankContext(TransactionCase):
         partner = self.env["res.partner"].create(
             {
                 "name": "Hybrid Partner 09",
-                "street": "Oude Fabriekstraat 1",
+                "street": "Oudestraat 1",
                 "street2": "2/2.14",
-                "zip": "3812 NR",
-                "city": "Amersfoort",
+                "zip": "3942 NR",
+                "city": "Adelala",
                 "country_id": country.id,
             }
         )
