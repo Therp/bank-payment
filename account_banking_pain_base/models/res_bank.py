@@ -14,10 +14,8 @@ class ResBank(models.Model):
 
     enforce_sepa_hybrid_mode = fields.Boolean(
         string="Enforce SEPA Hybrid Mode",
-        help=(
-            "When enabled, SEPA pain.001 exports will strip detailed postal address "
-            "(postal code and address lines) and only include City and Country."
-        ),
+        help="Only applies to PAIN 09 exports. When enabled, the exporter will "
+        "generate a hybrid postal address (PstCd/TwnNm/Ctry + optional AdrLine).",
     )
 
     @api.constrains("bic")

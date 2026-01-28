@@ -403,8 +403,7 @@ class AccountPaymentOrder(models.Model):
         # date should be adjusted for 09
         requested_date_node = etree.SubElement(payment_info, request_date_tag)
         if (gen_args.get("pain_flavor", "")).startswith("pain.001.001.09"):
-            requested_date_node_dt = etree.SubElement(requested_date_node, "Dt")
-            requested_date_node_dt.text = requested_date
+            etree.SubElement(requested_date_node, "Dt").text = requested_date
         else:
             requested_date_node.text = requested_date
         return payment_info, nb_of_transactions, control_sum
@@ -528,78 +527,74 @@ class AccountPaymentOrder(models.Model):
         return True
 
     @api.model
+    def _get_bank_record(self):
+        """Retrieve the exporting bank from context
+        when export is triggered by a payment order.
+        """
+        bank = self.env["res.bank"].browse()
+        bank_id = self.env.context.get("export_bank_id")
+        if bank_id:
+            bank = self.env["res.bank"].browse(bank_id)
+        elif self and len(self) == 1:
+            bank = (
+                self.company_partner_bank_id.bank_id
+                or self.journal_id.bank_account_id.bank_id
+            )
+        return bank
+
+    def open2generated(self):
+        """Ensure export_bank_id is available in context for XML generation"""
+        self.ensure_one()
+        bank = self.company_partner_bank_id.bank_id or (
+            self.journal_id.bank_account_id and self.journal_id.bank_account_id.bank_id
+        )
+        self_with_context_bank = (
+            self.with_context(export_bank_id=bank.id) if bank else self
+        )
+        return super(AccountPaymentOrder, self_with_context_bank).open2generated()
+
+    @api.model
     def generate_address_block(self, parent_node, partner, gen_args):
         """Generate the piece of the XML corresponding to PstlAdr"""
         if not partner.country_id:
             return True
-        pain_flavor = gen_args.get("pain_flavor", "")
+        pain_flavor = (gen_args.get("pain_flavor", "")).strip()
         bank = self._get_bank_record()
-        postal_address = etree.SubElement(parent_node, "PstlAdr")
-        if bank.enforce_sepa_hybrid_mode:
+        if pain_flavor == "pain.001.001.09" and bank.enforce_sepa_hybrid_mode:
             # hybrid address is only emitted for PAIN .09, because the
             # schema defines the structured tags (PstCd/TwnNm/Ctry) and enforces
             # a strict element order where AdrLine must come last
-            if pain_flavor == "pain.001.001.09":
-                if not partner.city:
-                    raise UserError(
-                        _(
-                            "The bank '%(bank)s' enforces SEPA hybrid mode for %(flavor)s, "
-                            "but the partner '%(partner)s' has no City. Please set a City "
-                            "or disable 'Enforce SEPA Hybrid Mode' on the bank."
-                        )
-                        % {
-                            "bank": bank.display_name,
-                            "flavor": pain_flavor,
-                            "partner": partner.display_name,
-                        }
+            if not partner.city:
+                raise UserError(
+                    _(
+                        "PAIN format %(flavor)s requires the City (TwnNm) to be set. "
+                        "Partner(s) missing City: %(partner)s. "
+                        "Please set City or choose an older PAIN format."
                     )
-                # Order matters
-                if partner.zip:
-                    pstcd = etree.SubElement(postal_address, "PstCd")
-                    pstcd.text = self._prepare_field(
-                        "zip",
-                        "partner.zip",
-                        {"partner": partner},
-                        16,
-                        gen_args=gen_args,
-                    )
-                twn = etree.SubElement(postal_address, "TwnNm")
-                twn.text = self._prepare_field(
-                    "city",
-                    "partner.city",
+                    % {
+                        "flavor": pain_flavor,
+                        "partner": partner.display_name,
+                    }
+                )
+            postal_address = etree.SubElement(parent_node, "PstlAdr")
+            # Order matters
+            if partner.zip:
+                pstcd = etree.SubElement(postal_address, "PstCd")
+                pstcd.text = self._prepare_field(
+                    "zip",
+                    "partner.zip",
                     {"partner": partner},
-                    35,  # Max35Text
+                    16,
                     gen_args=gen_args,
                 )
-                country = etree.SubElement(postal_address, "Ctry")
-                country.text = self._prepare_field(
-                    "Country",
-                    "partner.country_id.code",
-                    {"partner": partner},
-                    2,
-                    gen_args=gen_args,
-                )
-                if partner.street:
-                    adrline1 = etree.SubElement(postal_address, "AdrLine")
-                    adrline1.text = self._prepare_field(
-                        "Adress Line1",
-                        "partner.street",
-                        {"partner": partner},
-                        70,
-                        gen_args=gen_args,
-                    )
-                if partner.street2:
-                    adrline2 = etree.SubElement(postal_address, "AdrLine")
-                    adrline2.text = self._prepare_field(
-                        "Adress Line2",
-                        "partner.street2",
-                        {"partner": partner},
-                        70,
-                        gen_args=gen_args,
-                    )
-                return True
-            # default hybrid behavior for other flavors:
-            # Keep only city + country using AdrLine only
+            twn = etree.SubElement(postal_address, "TwnNm")
+            twn.text = self._prepare_field(
+                "city",
+                "partner.city",
+                {"partner": partner},
+                35,
+                gen_args=gen_args,
+            )
             country = etree.SubElement(postal_address, "Ctry")
             country.text = self._prepare_field(
                 "Country",
@@ -608,17 +603,36 @@ class AccountPaymentOrder(models.Model):
                 2,
                 gen_args=gen_args,
             )
-            if partner.city:
-                adrline = etree.SubElement(postal_address, "AdrLine")
-                adrline.text = self._prepare_field(
-                    "city",
-                    "partner.city",
+            if partner.street:
+                adrline1 = etree.SubElement(postal_address, "AdrLine")
+                adrline1.text = self._prepare_field(
+                    "Adress Line1",
+                    "partner.street",
                     {"partner": partner},
-                    70,  # AdrLine max length
+                    70,
+                    gen_args=gen_args,
+                )
+            if partner.street2:
+                adrline2 = etree.SubElement(postal_address, "AdrLine")
+                adrline2.text = self._prepare_field(
+                    "Adress Line2",
+                    "partner.street2",
+                    {"partner": partner},
+                    70,
                     gen_args=gen_args,
                 )
             return True
-        # untouched below
+        # Stick to pre-ESL-2.1 unstructured address format for other flavors.
+        # Keep only city + country using AdrLine only
+        postal_address = etree.SubElement(parent_node, "PstlAdr")
+        country = etree.SubElement(postal_address, "Ctry")
+        country.text = self._prepare_field(
+            "Country",
+            "partner.country_id.code",
+            {"partner": partner},
+            2,
+            gen_args=gen_args,
+        )
         if partner.street:
             adrline1 = etree.SubElement(postal_address, "AdrLine")
             adrline1.text = self._prepare_field(
@@ -628,7 +642,6 @@ class AccountPaymentOrder(models.Model):
                 70,
                 gen_args=gen_args,
             )
-
         if (
             pain_flavor.startswith("pain.001.001.")
             or pain_flavor.startswith("pain.008.001.")
@@ -642,61 +655,18 @@ class AccountPaymentOrder(models.Model):
                     70,
                     gen_args=gen_args,
                 )
-            if (
-                gen_args.get("pain_flavor").startswith("pain.001.001.")
-                or gen_args.get("pain_flavor").startswith("pain.008.001.")
-            ) and (partner.zip or partner.city):
-                adrline2 = etree.SubElement(postal_address, "AdrLine")
-                val = []
-                if partner.zip:
-                    val.append(
-                        self._prepare_field(
-                            "zip",
-                            "partner.zip",
-                            {"partner": partner},
-                            70,
-                            gen_args=gen_args,
-                        )
-                    )
-                if partner.city:
-                    val.append(
-                        self._prepare_field(
-                            "city",
-                            "partner.city",
-                            {"partner": partner},
-                            70,
-                            gen_args=gen_args,
-                        )
-                    )
-                adrline2.text = " ".join(val)
+            else:
+                val = ""
+            if partner.city:
+                val += " " + self._prepare_field(
+                    "city",
+                    "partner.city",
+                    {"partner": partner},
+                    70,
+                    gen_args=gen_args,
+                )
+            adrline2.text = val
         return True
-
-    @api.model
-    def _get_bank_record(self):
-        """Retrieve bank"""
-        bank = self.env["res.bank"].browse()
-        bank_id = self.env.context.get("export_bank_id")
-        if bank_id:
-            bank = self.env["res.bank"].browse(bank_id)
-        # probably never reached
-        elif self and len(self) == 1:
-            bank = (
-                self.company_partner_bank_id.bank_id
-                or self.journal_id.bank_account_id.bank_id
-            )
-        return bank
-
-    def open2generated(self):
-        """Ensure export_bank_id is in context before generating the file"""
-        self.ensure_one()
-        bank = self.company_partner_bank_id.bank_id or (
-            self.journal_id.bank_account_id and self.journal_id.bank_account_id.bank_id
-        )
-        self_with_context_bank = (
-            self.with_context(export_bank_id=bank.id) if bank else self
-        )
-        # Call super for a specific context if bank exists
-        return super(AccountPaymentOrder, self_with_context_bank).open2generated()
 
     @api.model
     def generate_party_block(
