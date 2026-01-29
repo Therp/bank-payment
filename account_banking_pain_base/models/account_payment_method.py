@@ -17,6 +17,15 @@ class AccountPaymentMethod(models.Model):
         "characters are used in the generated PAIN file.",
     )
     warn_not_sepa = fields.Boolean(string="Warn If Not SEPA")
+    enforce_sepa_hybrid_mode = fields.Boolean(
+        default=True,
+        help="Generate hybrid address blocks for PAIN.001.001.09 ",
+    )
+    sepa_hybrid_include_address = fields.Boolean(
+        default=False,
+        string="Include Address",
+        help="",
+    )
 
     def get_xsd_file_path(self):
         """This method is designed to be inherited in the SEPA modules"""

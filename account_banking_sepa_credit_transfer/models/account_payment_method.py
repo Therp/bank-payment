@@ -1,7 +1,7 @@
 # Copyright 2016-2020 Akretion (Alexis de Lattre <alexis.delattre@akretion.com>)
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl.html).
 
-from odoo import api, fields, models
+from odoo import fields, models
 
 
 class AccountPaymentMethod(models.Model):
@@ -10,9 +10,13 @@ class AccountPaymentMethod(models.Model):
     pain_version = fields.Selection(
         selection_add=[
             ("pain.001.001.02", "pain.001.001.02"),
-            ("pain.001.001.03", "pain.001.001.03 (recommended for credit transfer)"),
+            (
+                "pain.001.001.03",
+                "pain.001.001.03 (recommended for Germany credit transfer)",
+            ),
             ("pain.001.001.04", "pain.001.001.04"),
             ("pain.001.001.05", "pain.001.001.05"),
+            ("pain.001.001.09", "pain.001.001.09 (recommended for credit transfer)"),
             ("pain.001.003.03", "pain.001.003.03"),
         ],
         ondelete={
@@ -20,6 +24,7 @@ class AccountPaymentMethod(models.Model):
             "pain.001.001.03": "set null",
             "pain.001.001.04": "set null",
             "pain.001.001.05": "set null",
+            "pain.001.001.09": "set null",
             "pain.001.003.03": "set null",
         },
     )
@@ -31,6 +36,7 @@ class AccountPaymentMethod(models.Model):
             "pain.001.001.03",
             "pain.001.001.04",
             "pain.001.001.05",
+            "pain.001.001.09",
             "pain.001.003.03",
         ]:
             path = (
@@ -38,12 +44,3 @@ class AccountPaymentMethod(models.Model):
             )
             return path
         return super().get_xsd_file_path()
-
-    @api.model
-    def _get_payment_method_information(self):
-        res = super()._get_payment_method_information()
-        res["sepa_credit_transfer"] = {
-            "mode": "multi",
-            "domain": [("type", "=", "bank")],
-        }
-        return res

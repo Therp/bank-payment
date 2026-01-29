@@ -536,28 +536,28 @@ class AccountPaymentOrder(models.Model):
         """Generate the piece of the XML corresponding to PstlAdr"""
         if not partner.country_id:
             return True
-        pain_flavor = gen_args.get("pain_flavor", "")
-        bank = self._get_bank_record()
-        postal_address = etree.SubElement(parent_node, "PstlAdr")
-        if pain_flavor == "pain.001.001.09" and bank.enforce_sepa_hybrid_mode:
+        pain_flavor = (gen_args.get("pain_flavor", "")).strip()
+        payment_method = self.payment_mode_id.payment_method_id
+        if pain_flavor == "pain.001.001.09" and payment_method.enforce_sepa_hybrid_mode:
             # hybrid address is only emitted for PAIN .09, because the
             # schema defines the structured tags (PstCd/TwnNm/Ctry) and enforces
             # a strict element order where AdrLine must come last
             if not partner.city:
                 raise UserError(
                     _(
-                        "PAIN format %(flavor)s requires a City (TwnNm), but the "
-                        "partner '%(partner)s' has no City.\n\n"
-                        "Please set a City on this partner, or choose an older PAIN "
-                        "format (for example pain.001.001.03)."
+                        "PAIN format %(flavor)s requires City (TwnNm). "
+                        "Partner missing City: %(partner)s. "
+                        "Please set a City or choose an older PAIN format."
                     )
                     % {
                         "flavor": pain_flavor,
                         "partner": partner.display_name,
                     }
                 )
-            # Order matters
-            if partner.zip:
+            postal_address = etree.SubElement(parent_node, "PstlAdr")
+            # Order matters for pain.001.001.09
+            if payment_method.sepa_hybrid_include_address and partner.zip:
+                # include this only if boolean is true and zip exists
                 pstcd = etree.SubElement(postal_address, "PstCd")
                 pstcd.text = self._prepare_field(
                     "zip",
@@ -571,7 +571,7 @@ class AccountPaymentOrder(models.Model):
                 "city",
                 "partner.city",
                 {"partner": partner},
-                35,  # Max35Text
+                35,
                 gen_args=gen_args,
             )
             country = etree.SubElement(postal_address, "Ctry")
@@ -582,27 +582,30 @@ class AccountPaymentOrder(models.Model):
                 2,
                 gen_args=gen_args,
             )
-            if partner.street:
-                adrline1 = etree.SubElement(postal_address, "AdrLine")
-                adrline1.text = self._prepare_field(
-                    "Address Line1",
-                    "partner.street",
-                    {"partner": partner},
-                    70,
-                    gen_args=gen_args,
-                )
-            if partner.street2:
-                adrline2 = etree.SubElement(postal_address, "AdrLine")
-                adrline2.text = self._prepare_field(
-                    "Address Line2",
-                    "partner.street2",
-                    {"partner": partner},
-                    70,
-                    gen_args=gen_args,
-                )
+            # Optional address lines (disabled by default)
+            if payment_method.sepa_hybrid_include_address:
+                if partner.street:
+                    adrline1 = etree.SubElement(postal_address, "AdrLine")
+                    adrline1.text = self._prepare_field(
+                        "Address Line 1",
+                        "partner.street",
+                        {"partner": partner},
+                        70,
+                        gen_args=gen_args,
+                    )
+                if partner.street2:
+                    adrline2 = etree.SubElement(postal_address, "AdrLine")
+                    adrline2.text = self._prepare_field(
+                        "Address Line 2",
+                        "partner.street2",
+                        {"partner": partner},
+                        70,
+                        gen_args=gen_args,
+                    )
             return True
         # Stick to pre-ESL-2.1 unstructured address format for other flavors.
         # Keep only city + country using AdrLine only
+        postal_address = etree.SubElement(parent_node, "PstlAdr")
         country = etree.SubElement(postal_address, "Ctry")
         country.text = self._prepare_field(
             "Country",
@@ -611,17 +614,6 @@ class AccountPaymentOrder(models.Model):
             2,
             gen_args=gen_args,
         )
-        if partner.city:
-            adrline = etree.SubElement(postal_address, "AdrLine")
-            adrline.text = self._prepare_field(
-                "city",
-                "partner.city",
-                {"partner": partner},
-                70,  # AdrLine max length
-                gen_args=gen_args,
-            )
-            return True
-        # untouched below
         if partner.street:
             adrline1 = etree.SubElement(postal_address, "AdrLine")
             adrline1.text = self._prepare_field(
@@ -631,7 +623,6 @@ class AccountPaymentOrder(models.Model):
                 70,
                 gen_args=gen_args,
             )
-
         if (
             pain_flavor.startswith("pain.001.001.")
             or pain_flavor.startswith("pain.008.001.")
@@ -656,33 +647,7 @@ class AccountPaymentOrder(models.Model):
                     gen_args=gen_args,
                 )
             adrline2.text = val
-
-    @api.model
-    def _get_bank_record(self):
-        """Retrieve bank"""
-        bank = self.env["res.bank"].browse()
-        bank_id = self.env.context.get("export_bank_id")
-        if bank_id:
-            bank = self.env["res.bank"].browse(bank_id)
-        # probably never reached
-        elif self and len(self) == 1:
-            bank = (
-                self.company_partner_bank_id.bank_id
-                or self.journal_id.bank_account_id.bank_id
-            )
-        return bank
-
-    def open2generated(self):
-        """Ensure export_bank_id is in context before generating the file"""
-        self.ensure_one()
-        bank = self.company_partner_bank_id.bank_id or (
-            self.journal_id.bank_account_id and self.journal_id.bank_account_id.bank_id
-        )
-        self_with_context_bank = (
-            self.with_context(export_bank_id=bank.id) if bank else self
-        )
-        # Call super for a specific context if bank exists
-        return super(AccountPaymentOrder, self_with_context_bank).open2generated()
+        return True
 
     @api.model
     def generate_party_block(
